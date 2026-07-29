@@ -19,6 +19,13 @@ on the second byte:
         count(1) | affected(uint16 LE * count) |
         name_len(1) | name(GBK) | 00 00 00 00
 
+    Opcode 43fa carries the speed order with pets interleaved among their
+    owners -- pets act as independent units on their own speed. Entries are
+    (unit, flags, 0, 0), and the order shifts between rounds as speed buffs
+    land. Only the recording client's own side is ever sent, and only 2 of
+    the 17 edition-236 replays carry it at all, so it cannot supply the full
+    20-unit ordering that attacker attribution would need.
+
     Rounds are delimited by opcode 2ffa, which announces the turn order as
     (unit, rank) pairs. The replay holds 63 of them, matching its 63 sync
     frames and 63 39fa packets exactly -- a 63-round battle. The order
@@ -85,6 +92,7 @@ STAT_OPCODE = "2a42"
 REGISTER_OPCODE = "176e"
 STATUS_OPCODE = "07fa"
 ROUND_OPCODE = "2ffa"
+SPEED_OPCODE = "43fa"
 HP_KIND = 0
 MAX_TARGETS = 24
 GBK_RE = re.compile(rb"(?:[\xa1-\xf7][\xa1-\xfe])+")
@@ -142,6 +150,30 @@ def parse_round_marker(payload: bytes) -> list[tuple[int, int]] | None:
     if not count or 7 + count * 2 > len(body):
         return None
     return [(body[7 + 2 * k], body[8 + 2 * k]) for k in range(count)]
+
+
+def parse_speed_order(payload: bytes) -> list[tuple[int, int]] | None:
+    """Decode a 43fa speed order into (unit, flags) pairs.
+
+    Entries are 4 bytes: unit id, a flag byte, then two zeros. Pets are
+    independent units with their own speed, so unlike the 2ffa turn order
+    this list interleaves them with their owners. Only the recording
+    client's own side is ever sent.
+    """
+    if payload[:2].hex() != SPEED_OPCODE or len(payload) < 12:
+        return None
+    body = payload[4:-3]
+    count = struct.unpack_from("<H", body, 5)[0]
+    if not count or 7 + count * 4 > len(body):
+        return None
+    entries = []
+    for k in range(count):
+        word = struct.unpack_from("<I", body, 7 + k * 4)[0]
+        unit, flags = word & 0xFF, (word >> 8) & 0xFF
+        if word >> 16 or not unit:
+            return None
+        entries.append((unit, flags))
+    return entries
 
 
 def build_unit_table(packets: list[bytes]) -> dict[int, str]:
@@ -223,6 +255,14 @@ def extract_events(records: list[tuple[int, int, bytes]]) -> dict:
         if len(payload) < 7 or payload[-3:] != TERMINATOR:
             continue
         body = payload[4:-3]
+
+        speed = parse_speed_order(payload)
+        if speed is not None:
+            if rounds:
+                rounds[-1]["speed_order"] = [u for u, _ in speed]
+                rounds[-1]["speed_order_names"] = [name_of(u) for u, _ in speed]
+            stats["speed_order"] += 1
+            continue
 
         marker = parse_round_marker(payload)
         if marker is not None:
