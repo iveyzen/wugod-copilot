@@ -19,6 +19,13 @@ on the second byte:
         count(1) | affected(uint16 LE * count) |
         name_len(1) | name(GBK) | 00 00 00 00
 
+    Rounds are delimited by opcode 2ffa, which announces the turn order as
+    (unit, rank) pairs. The replay holds 63 of them, matching its 63 sync
+    frames and 63 39fa packets exactly -- a 63-round battle. The order
+    covers the 10 players only; pets and summons act too but are absent
+    from it, so turns cannot be counted off the order alone (predicting the
+    victim-team sequence from it fits only 58% of rounds).
+
     The affected-unit list is solid: the hit-point packets that follow an
     action name exactly those units, in the same order. ``subject`` is the
     primary affected unit, NOT the attacker -- treating it as the attacker
@@ -56,6 +63,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import bisect
 import collections
 import json
 import re
@@ -72,6 +80,7 @@ STAT_SUBOP = 0x6C
 STAT_OPCODE = "2a42"
 REGISTER_OPCODE = "176e"
 STATUS_OPCODE = "07fa"
+ROUND_OPCODE = "2ffa"
 HP_KIND = 0
 MAX_TARGETS = 24
 GBK_RE = re.compile(rb"(?:[\xa1-\xf7][\xa1-\xfe])+")
@@ -118,6 +127,17 @@ def body_of(payload: bytes) -> bytes | None:
     if struct.unpack_from("<H", payload, 2)[0] != len(payload) - 7:
         return None
     return payload[4:-3]
+
+
+def parse_round_marker(payload: bytes) -> list[tuple[int, int]] | None:
+    """Decode a 2ffa turn-order announcement into (unit, rank) pairs."""
+    if payload[:2].hex() != ROUND_OPCODE or len(payload) < 12:
+        return None
+    body = payload[4:-3]
+    count = struct.unpack_from("<H", body, 5)[0]
+    if not count or 7 + count * 2 > len(body):
+        return None
+    return [(body[7 + 2 * k], body[8 + 2 * k]) for k in range(count)]
 
 
 def build_unit_table(packets: list[bytes]) -> dict[int, str]:
@@ -191,12 +211,30 @@ def extract_events(records: list[tuple[int, int, bytes]]) -> dict:
     events: list[dict] = []
     skills: dict[int, str] = {}
     stats = collections.Counter()
+    rounds: list[dict] = []
+    round_no = 0
 
     for index, payload in enumerate(packets):
         opcode = payload[:2].hex()
         if len(payload) < 7 or payload[-3:] != TERMINATOR:
             continue
         body = payload[4:-3]
+
+        marker = parse_round_marker(payload)
+        if marker is not None:
+            round_no += 1
+            rounds.append(
+                {
+                    "round": round_no,
+                    "seq": index,
+                    "turn_order": [u for u, _ in sorted(marker, key=lambda t: t[1])],
+                    "turn_order_names": [
+                        name_of(u) for u, _ in sorted(marker, key=lambda t: t[1])
+                    ],
+                }
+            )
+            stats["round"] += 1
+            continue
 
         # Status notices ("被封印", "气血不足") sit outside the 0xe5 families.
         if opcode == STATUS_OPCODE and len(body) > 5:
@@ -272,9 +310,17 @@ def extract_events(records: list[tuple[int, int, bytes]]) -> dict:
                     break
     stats["hp_linked_to_skill"] = linked
 
+    # Stamp every event with the round it fell in.
+    starts = [r["seq"] for r in rounds]
+    for event in events:
+        pos = bisect.bisect_right(starts, event["seq"])
+        if pos:
+            event["round"] = pos
+
     return {
         "units": {str(k): v for k, v in sorted(units.items())},
         "skills": {str(k): v for k, v in sorted(skills.items())},
+        "rounds": rounds,
         "packet_count": len(packets),
         "event_count": len(events),
         "stats": dict(stats),
@@ -291,6 +337,7 @@ def print_report(doc: dict) -> None:
         f"  actions {stats.get('action', 0):,}   damage {stats.get('damage', 0):,}   "
         f"heals {stats.get('heal', 0):,}   status {stats.get('status', 0):,}"
     )
+    print(f"  rounds: {len(doc['rounds'])}")
     linked = stats.get("hp_linked_to_skill", 0)
     print(f"  hp changes linked to a skill: {linked:,} of {len(dmg) + stats.get('heal', 0):,}")
     print(f"  skill names recovered: {len(doc['skills'])} (ids seen: {len({e['skill_id'] for e in events if e['kind'] == 'action'})})")
