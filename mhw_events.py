@@ -31,16 +31,20 @@ on the second byte:
     primary affected unit, NOT the attacker -- treating it as the attacker
     puts 96% of damage inside one team, which a 5v5 match rules out.
 
-    Which unit dealt a hit stays undecoded, and three scans say it is not
-    encoded near the damage at all. Sweeping every byte of every packet
-    within 150 of a hit for one holding an enemy-team unit id peaks at 67%
-    cross-team, barely above chance; the nearest 21fa unit gives 40%. The
-    damage carrier 2942 is 0% cross-team over 74 samples -- it states only
-    that units on one side lost hit points. Opcodes 2b42, 3742 and 2f42 do
-    run subject -> enemy target (87-90% cross-team) and look like genuine
-    attack declarations, but cover ~52 packets against 259 damage clusters,
-    so they explain a minority of hits. The attacker is most likely
-    implicit in turn order, which would have to be reconstructed first.
+    Which unit dealt a hit is not encoded near the damage. Sweeping every
+    byte of every packet within 150 of a hit for one holding an enemy-team
+    unit id peaks at 57% cross-team over 4,349 damage events drawn from all
+    17 replays of edition 236 -- chance, for a binary split. The nearest
+    21fa unit gives 40%, and the damage carrier 2942 is 0% cross-team: it
+    states only that units on one side lost hit points. Opcodes 2b42, 3742
+    and 2f42 do run subject -> enemy target at 87-90%, but cover ~52 packets
+    against 259 damage clusters in the finals, so they explain a minority of
+    hits. Reconstructing it needs either deeper turn-block decoding or
+    labels from match video.
+
+    Teams are units 1..10 versus 11..20. Opcode 43fa, present in 2 of the
+    17 replays, lists one side's roster and returns exactly 1..10 there,
+    which is what pins the split down.
 
     subop 0x6c -- unit stat delta (opcode 2a42)::
 
