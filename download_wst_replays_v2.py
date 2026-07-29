@@ -548,6 +548,24 @@ def safe_filename(name: str, fallback: str = "download") -> str:
     return (name or fallback)[:180]
 
 
+def fix_header_mojibake(name: str) -> str:
+    """Repair filenames whose UTF-8/GBK bytes were decoded as Latin-1.
+
+    http.client decodes header bytes as Latin-1, but Discuz sends raw
+    UTF-8 (some forums GBK) in the plain ``filename=`` parameter.
+    """
+    try:
+        raw = name.encode("latin-1")
+    except UnicodeEncodeError:
+        return name
+    for encoding in ("utf-8", "gbk"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return name
+
+
 def filename_from_headers(headers: Message, final_url: str, link_text: str = "") -> str:
     disposition = headers.get("Content-Disposition", "")
     match = re.search(r"filename\*\s*=\s*[^']*''([^;]+)", disposition, re.I)
@@ -555,7 +573,7 @@ def filename_from_headers(headers: Message, final_url: str, link_text: str = "")
         return safe_filename(unquote(match.group(1)))
     match = re.search(r"filename\s*=\s*[\"']?([^\"';]+)", disposition, re.I)
     if match:
-        return safe_filename(match.group(1))
+        return safe_filename(fix_header_mojibake(match.group(1)))
     text_match = re.search(r"([^/\\<>]+?\.(?:mhw|zip|rar|7z))", link_text, re.I)
     if text_match:
         return safe_filename(text_match.group(1))
@@ -979,6 +997,19 @@ def self_test() -> int:
         "梦幻西游武神坛236联 八强录像",
     ]
     assert safe_filename("紫禁城:曲阜?.mhw") == "紫禁城_曲阜_.mhw"
+    utf8_mojibake = "紫禁城VS曲阜孔庙.mhw".encode("utf-8").decode("latin-1")
+    assert fix_header_mojibake(utf8_mojibake) == "紫禁城VS曲阜孔庙.mhw"
+    gbk_mojibake = "决赛录像.mhw".encode("gbk").decode("latin-1")
+    assert fix_header_mojibake(gbk_mojibake) == "决赛录像.mhw"
+    assert fix_header_mojibake("plain-ascii.mhw") == "plain-ascii.mhw"
+    headers = Message()
+    headers["Content-Disposition"] = (
+        'attachment; filename="' + utf8_mojibake + '"'
+    )
+    assert (
+        filename_from_headers(headers, "http://bbs.yzz.cn/forum.php?mod=attachment")
+        == "紫禁城VS曲阜孔庙.mhw"
+    )
     assert (
         iri_to_uri("https://example.com/录像/紫禁城 VS 曲阜.mhw?名称=决赛")
         == "https://example.com/%E5%BD%95%E5%83%8F/%E7%B4%AB%E7%A6%81%E5%9F%8E%20VS%20%E6%9B%B2%E9%98%9C.mhw?"
