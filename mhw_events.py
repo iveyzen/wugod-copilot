@@ -22,8 +22,18 @@ on the second byte:
     The affected-unit list is solid: the hit-point packets that follow an
     action name exactly those units, in the same order. ``subject`` is the
     primary affected unit, NOT the attacker -- treating it as the attacker
-    puts 96% of damage inside one team, which a 5v5 match rules out. Which
-    unit dealt a hit is therefore still undecoded.
+    puts 96% of damage inside one team, which a 5v5 match rules out.
+
+    Which unit dealt a hit stays undecoded, and three scans say it is not
+    encoded near the damage at all. Sweeping every byte of every packet
+    within 150 of a hit for one holding an enemy-team unit id peaks at 67%
+    cross-team, barely above chance; the nearest 21fa unit gives 40%. The
+    damage carrier 2942 is 0% cross-team over 74 samples -- it states only
+    that units on one side lost hit points. Opcodes 2b42, 3742 and 2f42 do
+    run subject -> enemy target (87-90% cross-team) and look like genuine
+    attack declarations, but cover ~52 packets against 259 damage clusters,
+    so they explain a minority of hits. The attacker is most likely
+    implicit in turn order, which would have to be reconstructed first.
 
     subop 0x6c -- unit stat delta (opcode 2a42)::
 
